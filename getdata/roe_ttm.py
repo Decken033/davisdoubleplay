@@ -15,56 +15,48 @@ def test_interface():
         return False
 
     # 测试单个股票单个日期
-    test_stock = "000425.SZ"
-    test_date = "20101231"
+    test_stock = "000002.SZ"
+    test_date = "20091231"
 
     print(f"\n测试获取股票 {test_stock} 在 {test_date} 的 ROE TTM 数据...")
 
     try:
-        # 尝试不同的参数组合
-        test_configs = [
-            ('THS_BD with params', lambda: THS_BD(test_stock, 'roe_ttm', 'format:xml', test_date)),
-            ('THS_BD simple', lambda: THS_BD(test_stock, 'roe_ttm', test_date)),
-            ('THS_DS time series', lambda: THS_DS(test_stock, 'roe_ttm', test_date, test_date)),
-            ('THS_HF high frequency', lambda: THS_HF(test_stock, 'roe_ttm', test_date, '')),
-        ]
+        # 测试不同的参数格式
+        # 格式1：三参数（可能有未来函数）
+        result1 = THS_BD(test_stock, 'roe_ttm', test_date)
+        print(f"  三参数测试:")
+        print(f"    errorcode: {result1.errorcode}")
+        print(f"    data: {result1.data}")
 
-        result = None
-        for func_name, func_call in test_configs:
-            try:
-                print(f"\n尝试: {func_name}")
-                result = func_call()
-                print(f"  errorcode: {result.errorcode}")
-                print(f"  errmsg: {result.errmsg}")
-                print(f"  data: {result.data}")
 
-                # 查看对象的所有属性
-                print(f"  对象属性: {[attr for attr in dir(result) if not attr.startswith('_')]}")
 
-                if result.errorcode == 0 and result.data is not None:
-                    print(f"  ✓ 成功获取数据！")
-                    logout()
-                    return True
+        result2 = THS_BD(test_stock, 'roe_ttm', f'{test_date},100')
+        print(f"\n  带参数测试 (日期,100):")
+        print(f"    errorcode: {result2.errorcode}")
+        print(f"    data: {result2.data}")
 
-            except NameError as ne:
-                print(f"  ✗ 函数不存在")
-            except TypeError as te:
-                print(f"  ✗ 参数错误: {te}")
-            except Exception as e:
-                print(f"  ✗ 出错: {e}")
-
-        logout()
-        print("\n所有尝试都失败了，请检查同花顺 API 文档")
-        return False
+        # 判断哪个成功
+        if result2.errorcode == 0 and result2.data is not None:
+            print(f"\n  ✓ 带时点参数方式成功（推荐，无未来函数）！")
+            logout()
+            return True
+        elif result1.errorcode == 0 and result1.data is not None:
+            print(f"\n  ✓ 三参数方式成功（可能有未来函数风险）！")
+            logout()
+            return True
+        else:
+            print(f"\n  ✗ 两种方式都失败")
+            logout()
+            return False
 
     except Exception as e:
-        print(f"✗ 整体出错：{e}")
+        print(f"✗ 接口调用出错：{e}")
         logout()
         return False
 
 
 def get_roe_ttm_data():
-    """获取所有股票的ROE TTM数据"""
+    """获取所有股票的ROE TTM数据，支持断点续传"""
     print("=" * 50)
     print("开始获取ROE TTM数据")
     print("=" * 50)
@@ -88,52 +80,91 @@ def get_roe_ttm_data():
     print(f"共需获取 {len(date_list)} 个日期的数据")
     print(f"日期范围：{date_list[0]} 至 {date_list[-1]}")
 
+    # 检查是否有未完成的数据（断点续传）
+    output_file = "../roe_ttm_data.csv"
+    temp_file = "../roe_ttm_temp.csv"
+
+    if pd.io.common.file_exists(temp_file):
+        print(f"\n发现临时文件，从断点继续...")
+        existing_df = pd.read_csv(
+            temp_file,
+            dtype={
+                "date": str,
+                "stock_id": str,
+                "roe_ttm": float,
+            }
+        )
+        all_data = existing_df.to_dict('records')
+        completed_set = set(zip(existing_df['date'], existing_df['stock_id']))
+        print(f"已完成 {len(completed_set)} 条记录")
+    else:
+        all_data = []
+        completed_set = set()
+
     # 登录
     if not login(USERNAME, PASSWORD):
         print("登录失败，无法继续")
         return None
 
     # 批量获取数据
-    all_data = []
     total_requests = len(stock_list) * len(date_list)
-    completed = 0
+    completed = len(completed_set)
 
     print(f"\n开始批量获取，共需 {total_requests} 次请求...\n")
 
-    for date in date_list:
-        print(f"正在获取 {date} 的数据...")
+    try:
+        for date in date_list:
+            print(f"正在获取 {date} 的数据...")
 
-        for stock in stock_list:
-            try:
-                result = THS_BD(stock, 'roe_ttm', date)
+            for stock in stock_list:
+                # 跳过已完成的
+                if (date, stock) in completed_set:
+                    continue
 
-                if result.errorcode == 0 and result.data is not None:
-                    # 提取数据
-                    roe_value = result.data['roe_ttm'].iloc[0] if len(result.data) > 0 else None
-                    all_data.append({
-                        'date': date,
-                        'stock_id': stock,
-                        'roe_ttm': roe_value
-                    })
-                else:
+                try:
+                    # 使用三参数方式（已验证成功）
+                    result = THS_BD(stock, 'roe_ttm', date)
+
+                    if result.errorcode == 0 and result.data is not None:
+                        # 提取数据
+                        roe_value = result.data['roe_ttm'].iloc[0] if len(result.data) > 0 else None
+                        all_data.append({
+                            'date': date,
+                            'stock_id': stock,
+                            'roe_ttm': roe_value
+                        })
+                    else:
+                        all_data.append({
+                            'date': date,
+                            'stock_id': stock,
+                            'roe_ttm': None
+                        })
+
+                    completed += 1
+
+                    # 每100条保存一次临时文件
+                    if completed % 100 == 0:
+                        temp_df = pd.DataFrame(all_data)
+                        temp_df.to_csv(temp_file, index=False)
+                        print(f"  进度: {completed}/{total_requests} ({completed/total_requests*100:.1f}%) - 已保存临时文件")
+
+                except Exception as e:
+                    print(f"  ✗ 获取 {stock} 在 {date} 的数据失败: {e}")
                     all_data.append({
                         'date': date,
                         'stock_id': stock,
                         'roe_ttm': None
                     })
+                    completed += 1
 
-                completed += 1
-                if completed % 100 == 0:
-                    print(f"  进度: {completed}/{total_requests} ({completed/total_requests*100:.1f}%)")
-
-            except Exception as e:
-                print(f"  ✗ 获取 {stock} 在 {date} 的数据失败: {e}")
-                all_data.append({
-                    'date': date,
-                    'stock_id': stock,
-                    'roe_ttm': None
-                })
-                completed += 1
+    except KeyboardInterrupt:
+        print("\n\n用户中断！正在保存临时数据...")
+        temp_df = pd.DataFrame(all_data)
+        temp_df.to_csv(temp_file, index=False)
+        print(f"临时数据已保存到: {temp_file}")
+        print("下次运行将从断点继续")
+        logout()
+        return None
 
     logout()
 
@@ -143,10 +174,15 @@ def get_roe_ttm_data():
     print(f"有效数据: {result_df['roe_ttm'].notna().sum()} 条")
     print(f"缺失数据: {result_df['roe_ttm'].isna().sum()} 条")
 
-    # 保存到文件
-    output_file = "../roe_ttm_data.csv"
+    # 保存最终文件
     result_df.to_csv(output_file, index=False)
     print(f"\n数据已保存到: {output_file}")
+
+    # 删除临时文件
+    import os
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+        print("临时文件已清理")
 
     return result_df
 
