@@ -5,90 +5,73 @@ import numpy as np
 class DataLoader:
     """加载和处理因子数据"""
 
-    def __init__(self, data_path='data_1.xlsx'):
+    def __init__(self, roe_ttm_path='roe_ttm_data.csv', peg_path='peg_data.csv', adj_close_path='adj_close.csv'):
         """
         初始化数据加载器
 
         Args:
-            data_path: Excel数据文件路径
+            roe_ttm_path: ROE_TTM数据CSV文件路径
+            peg_path: PEG数据CSV文件路径
+            adj_close_path: 复权收盘价CSV文件路径（可选，用于验证）
         """
-        self.data_path = data_path
+        self.roe_ttm_path = roe_ttm_path
+        self.peg_path = peg_path
+        self.adj_close_path = adj_close_path
         self.roe_ttm = None
         self.peg = None
         self.netprofit = None
 
     def load_data(self):
         """加载所有数据表"""
-        print(f"正在加载数据: {self.data_path}")
+        print(f"正在加载数据:")
+        print(f"  ROE_TTM: {self.roe_ttm_path}")
+        print(f"  PEG: {self.peg_path}")
 
-        # 读取所有sheet
-        excel_data = pd.read_excel(self.data_path, sheet_name=None)
-
-        # 加载roe_ttm表
-        self.roe_ttm = excel_data['roe_ttm']
-        self.roe_ttm.set_index(self.roe_ttm.columns[0], inplace=True)
+        # 加载roe_ttm数据（长格式: date, stock_id, roe_ttm）
+        roe_df = pd.read_csv(self.roe_ttm_path, dtype={'date': str, 'stock_id': str})
+        self.roe_ttm = roe_df.pivot(
+            index='date',
+            columns='stock_id',
+            values='roe_ttm'
+        )
         self.roe_ttm.index.name = 'date'
 
-        # 加载peg表
-        self.peg = excel_data['peg']
-        self.peg.set_index(self.peg.columns[0], inplace=True)
+        # 加载peg数据（长格式: date, stock_id, peg, errorcode）
+        peg_df = pd.read_csv(self.peg_path, dtype={'date': str, 'stock_id': str})
+        self.peg = peg_df.pivot(
+            index='date',
+            columns='stock_id',
+            values='peg'
+        )
         self.peg.index.name = 'date'
 
-        # 加载netprofit表
-        self.netprofit = excel_data['netprofit']
-        self.netprofit.set_index(self.netprofit.columns[0], inplace=True)
-        self.netprofit.index.name = 'date'
+        # netprofit暂时设为None（如果有需要可以后续添加）
+        self.netprofit = None
 
         print(f"数据加载完成:")
         print(f"  roe_ttm: {self.roe_ttm.shape}")
         print(f"  peg: {self.peg.shape}")
-        print(f"  netprofit: {self.netprofit.shape}")
 
         # 验证股票代码是否一致
         self._validate_stock_codes()
 
     def _validate_stock_codes(self):
         """
-        验证三个表的股票代码是否一致
+        显示各数据源的股票覆盖情况（信息性报告）
 
-        检查 roe_ttm, peg, netprofit 三个表的列（股票代码）是否完全相同
-        如果不一致，打印警告信息
+        在实际选股时会自动处理数据不一致：
+        - 选股阶段：只使用roe_ttm和peg都有有效数据的股票
+        - 收益计算阶段：只使用价格数据存在的股票
         """
         roe_stocks = set(self.roe_ttm.columns)
         peg_stocks = set(self.peg.columns)
-        netprofit_stocks = set(self.netprofit.columns)
+        common_stocks = roe_stocks & peg_stocks
 
-        # 检查 roe_ttm 和 peg 是否一致
-        if roe_stocks != peg_stocks:
-            only_in_roe = roe_stocks - peg_stocks
-            only_in_peg = peg_stocks - roe_stocks
-            print(f"\n警告：roe_ttm 和 peg 表的股票代码不一致！")
-            if only_in_roe:
-                print(f"  仅在 roe_ttm 中: {len(only_in_roe)} 只股票")
-                print(f"  示例: {list(only_in_roe)[:5]}")
-            if only_in_peg:
-                print(f"  仅在 peg 中: {len(only_in_peg)} 只股票")
-                print(f"  示例: {list(only_in_peg)[:5]}")
-
-        # 检查 roe_ttm 和 netprofit 是否一致
-        if roe_stocks != netprofit_stocks:
-            only_in_roe = roe_stocks - netprofit_stocks
-            only_in_netprofit = netprofit_stocks - roe_stocks
-            print(f"\n警告：roe_ttm 和 netprofit 表的股票代码不一致！")
-            if only_in_roe:
-                print(f"  仅在 roe_ttm 中: {len(only_in_roe)} 只股票")
-                print(f"  示例: {list(only_in_roe)[:5]}")
-            if only_in_netprofit:
-                print(f"  仅在 netprofit 中: {len(only_in_netprofit)} 只股票")
-                print(f"  示例: {list(only_in_netprofit)[:5]}")
-
-        # 如果三个表完全一致
-        if roe_stocks == peg_stocks == netprofit_stocks:
-            print(f"\n✓ 三个表的股票代码完全一致，共 {len(roe_stocks)} 只股票")
-        else:
-            # 计算三个表的交集
-            common_stocks = roe_stocks & peg_stocks & netprofit_stocks
-            print(f"\n三个表的共同股票: {len(common_stocks)} 只")
+        print(f"\n数据覆盖情况:")
+        print(f"  roe_ttm: {len(roe_stocks)} 只股票")
+        print(f"  peg: {len(peg_stocks)} 只股票")
+        print(f"  两者交集: {len(common_stocks)} 只股票")
+        print(f"  说明: 选股时自动使用交集中的有效股票")
 
     def get_valid_stocks(self, date):
         """
@@ -141,7 +124,9 @@ class DataLoader:
 
         # 重置索引，将股票代码变成列
         df.reset_index(inplace=True)
-        df.rename(columns={'index': 'stock_code'}, inplace=True)
+        # 检查索引列的实际名称
+        if df.columns[0] in ['index', 'stock_id']:
+            df.rename(columns={df.columns[0]: 'stock_code'}, inplace=True)
 
         return df
 
@@ -174,7 +159,11 @@ class DataLoader:
 
 if __name__ == '__main__':
     # 测试代码
-    loader = DataLoader('data_1.xlsx')
+    loader = DataLoader(
+        roe_ttm_path='roe_ttm_data.csv',
+        peg_path='peg_data.csv',
+        adj_close_path='adj_close.csv'
+    )
     loader.load_data()
 
     # 获取所有调仓日期
@@ -186,10 +175,10 @@ if __name__ == '__main__':
     # 测试获取第一个调仓日的数据
     first_date = dates[0]
     print(f"\n{first_date} 的有效股票数据:")
-    valid_stocks = loader.get_valid_stocks(first_date)
-    print(f"有效股票数量: {len(valid_stocks)}")
+    stocks_df = loader.get_valid_stocks(first_date)
+    print(f"有效股票数量: {len(stocks_df)}")
     print(f"\n前10只股票:")
-    print(valid_stocks.head(10))
+    print(stocks_df.head(10))
 
     # 测试获取得分最高的25只股票
     print(f"\n{first_date} 得分最高的25只股票:")
