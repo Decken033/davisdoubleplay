@@ -36,21 +36,65 @@ def test_pe_ttm_interface():
 
 def get_pettm_data():
     print("获取pe_ttm数据")
-    df = pd.read_csv(
-        "../adj_close.csv",
+
+    # 从roe_ttm_data.csv读取股票列表和调仓日期
+    print("正在读取roe_ttm_data.csv以获取股票列表和调仓日...")
+    df_roe = pd.read_csv(
+        "../roe_ttm_data.csv",
         dtype={
             "date":str,
             "stock_id":str,
-            "adj_close":float,
+            "roe_ttm":float,
         }
     )
-    stock_list = df["stock_id"].unique().tolist()
+    stock_list = sorted(df_roe["stock_id"].unique().tolist())
     stock_count = len(stock_list)
-    print(f"要获取adj_close.csv中{stock_count}个股票")
+    print(f"股票数量: {stock_count}")
 
-    # 从adj_close.csv中提取日期列表
-    date_list = sorted(df["date"].unique().tolist())
-    print(f"需要获取{len(date_list)}个数据，日期范围从{date_list[0]}到{date_list[-1]}")
+    # 获取调仓日列表
+    rebalance_dates = sorted(df_roe["date"].unique().tolist())
+    print(f"调仓日数量: {len(rebalance_dates)}")
+    print(f"调仓日期范围: {rebalance_dates[0]} 到 {rebalance_dates[-1]}")
+
+    # 读取adj_close.csv获取所有交易日，用于找到前一交易日
+    print("\n正在读取adj_close.csv以确定前一交易日...")
+    df_price = pd.read_csv(
+        "../adj_close.csv",
+        dtype={"date":str, "stock_id":str, "adj_close":float}
+    )
+    all_trading_days = sorted(df_price["date"].unique().tolist())
+    print(f"交易日数量: {len(all_trading_days)}")
+
+    # 对每个调仓日，找到前一交易日
+    date_list = []
+    for rebalance_date in rebalance_dates:
+        # 如果调仓日不是交易日，向前找到最近的交易日
+        aligned_date = None
+        for trading_day in reversed(all_trading_days):
+            if trading_day <= rebalance_date:
+                aligned_date = trading_day
+                break
+
+        if aligned_date is None:
+            print(f"  警告: 调仓日 {rebalance_date} 早于所有交易日，跳过")
+            continue
+
+        # 找到对齐后日期的前一交易日
+        try:
+            idx = all_trading_days.index(aligned_date)
+            if idx > 0:
+                prev_trading_day = all_trading_days[idx - 1]
+                date_list.append(prev_trading_day)
+                if aligned_date != rebalance_date:
+                    print(f"  调仓日 {rebalance_date} -> 对齐到 {aligned_date} -> 前一交易日 {prev_trading_day}")
+                else:
+                    print(f"  调仓日 {rebalance_date} -> 前一交易日 {prev_trading_day}")
+            else:
+                print(f"  警告: 调仓日 {rebalance_date} 对齐到 {aligned_date}（第一个交易日），无前一交易日")
+        except ValueError:
+            print(f"  错误: 无法在交易日列表中找到 {aligned_date}")
+
+    print(f"\n最终需要获取 {len(date_list)} 个日期的pe_ttm数据")
 
     output_file = "../pe_ttm_data.csv"
     temp_file = "../pe_ttm_temp.csv"
