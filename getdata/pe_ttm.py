@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 from iFinDPy import THS_BD
-
+from bisect import bisect_left
 from login import login,logout
 from config import USERNAME,PASSWORD
 
@@ -68,31 +68,17 @@ def get_pettm_data():
     # 对每个调仓日，找到前一交易日
     date_list = []
     for rebalance_date in rebalance_dates:
-        # 如果调仓日不是交易日，向前找到最近的交易日
-        aligned_date = None
-        for trading_day in reversed(all_trading_days):
-            if trading_day <= rebalance_date:
-                aligned_date = trading_day
-                break
+        # 找到严格早于调仓日的最近交易日
+        idx = bisect_left(all_trading_days, rebalance_date)
 
-        if aligned_date is None:
-            print(f"  警告: 调仓日 {rebalance_date} 早于所有交易日，跳过")
+        if idx == 0:
+            print(f"  警告: 调仓日 {rebalance_date} 之前没有交易日，跳过")
             continue
 
-        # 找到对齐后日期的前一交易日
-        try:
-            idx = all_trading_days.index(aligned_date)
-            if idx > 0:
-                prev_trading_day = all_trading_days[idx - 1]
-                date_list.append(prev_trading_day)
-                if aligned_date != rebalance_date:
-                    print(f"  调仓日 {rebalance_date} -> 对齐到 {aligned_date} -> 前一交易日 {prev_trading_day}")
-                else:
-                    print(f"  调仓日 {rebalance_date} -> 前一交易日 {prev_trading_day}")
-            else:
-                print(f"  警告: 调仓日 {rebalance_date} 对齐到 {aligned_date}（第一个交易日），无前一交易日")
-        except ValueError:
-            print(f"  错误: 无法在交易日列表中找到 {aligned_date}")
+        pe_date = all_trading_days[idx - 1]
+        date_list.append(pe_date)
+
+        print(f"  调仓日 {rebalance_date} -> PE_TTM取数日 {pe_date}")
 
     print(f"\n最终需要获取 {len(date_list)} 个日期的pe_ttm数据")
 
