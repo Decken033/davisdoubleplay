@@ -49,7 +49,6 @@ def get_pettm_data():
     )
 
     # 注意：roe_ttm_data.csv中的date字段应该是调仓日（或已经对齐的日期）
-    # 如果不确定，需要先确认数据来源的日期含义
     print(f"总记录数: {len(df_roe)}")
     print(f"日期范围: {df_roe['date'].min()} 到 {df_roe['date'].max()}")
 
