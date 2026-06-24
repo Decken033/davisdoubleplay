@@ -28,14 +28,14 @@ class StockFilter:
         # 加载上市和退市日期数据
         self.description_df = pd.read_excel(self.description_path)
         # 确保日期列为字符串格式
-        self.description_df['S_INFO_LISTDATE'] = self.description_df['S_INFO_LISTDATE'].astype(str).str.replace('.0', '').str.strip()
-        self.description_df['S_INFO_DELISTDATE']=self.description_df['S_INFO_DELISTDATE'].astype(str).str.replace('.0', '').str.strip()
+        self.description_df['S_INFO_LISTDATE'] = self.description_df['S_INFO_LISTDATE'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        self.description_df['S_INFO_DELISTDATE']=self.description_df['S_INFO_DELISTDATE'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
 
         # 加载ST数据
         self.st_df = pd.read_excel(self.st_path)
         # 确保日期列为字符串格式
-        self.st_df['ENTRY_DT'] = self.st_df['ENTRY_DT'].astype(str).str.replace('.0', '').str.strip()
-        self.st_df['REMOVE_DT'] = self.st_df['REMOVE_DT'].astype(str).str.replace('.0', '').str.replace('nan', '').str.strip()
+        self.st_df['ENTRY_DT'] = self.st_df['ENTRY_DT'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        self.st_df['REMOVE_DT'] = self.st_df['REMOVE_DT'].astype(str).str.replace(r'\.0$', '', regex=True).str.replace('nan', '').str.strip()
 
         print(f"数据加载完成:")
         print(f"  股票总数: {len(self.description_df)}")
@@ -158,10 +158,10 @@ class StockFilter:
             check_dt = datetime.strptime(check_date, '%Y%m%d')
             days_listed = (check_dt - list_dt).days
 
-            # 简化处理：自然日 < min_list_days * 1.4（考虑周末节假日）
-            return days_listed < min_list_days * 1.4
+
+            calendar_threshold = round(min_list_days * 365 / 252)
         except:
-            return True
+            return days_listed < calendar_threshold
 
     def filter_stocks(self, stock_list, check_date,
                      remove_st=True,
@@ -244,22 +244,42 @@ if __name__ == '__main__':
     )
     stock_filter.load_data()
 
-    # 测试几个股票
-    test_stocks = ['000001.SZ', '600000.SH', '000425.SZ', '000013.SZ']
-    test_date = '20200101'
-
-    print(f"\n测试日期: {test_date}")
+    # 典型测试案例:
+    # 000013.SZ - 曾是ST (S), 2002-05-08至2004-09-20
+    # 000660.SZ - 曾是*ST (Y), 2003-05-12至2004-09-13
+    # 000004.SZ - 多次ST和*ST
+    # 002592.SZ - 当前仍是ST (S), 2020-07-02开始，无移除日期
+    test_stocks = ['000013.SZ', '000660.SZ', '000004.SZ', '002592.SZ']
+    # 测试日期1: 2003-06-01 (000013是ST期间, 000660是*ST期间)
+    test_date = '20030601'
+    print(f"\n{'='*60}")
+    print(f"测试日期: {test_date}")
+    print(f"{'='*60}")
     for stock in test_stocks:
         list_date = stock_filter.get_list_date(stock)
+        is_delisted = stock_filter.is_delisted(stock, test_date)
+        #单独调用时有个问题就是if pd.isna(remove_dt) or remove_dt == '' or remove_dt == 'nan': return True   # 不管是否退市，一律认为"仍在ST"
         is_st = stock_filter.is_st_stock(stock, test_date)
         is_new = stock_filter.is_new_stock(stock, test_date)
         print(f"\n{stock}:")
         print(f"  上市日期: {list_date}")
+        print(f"  是否退市: {is_delisted}")
         print(f"  是否ST: {is_st}")
         print(f"  是否新股: {is_new}")
 
+    # 测试日期2: 2021-01-01 (002592是ST期间)
+    test_date = '20210101'
+    print(f"\n{'='*60}")
+    print(f"测试日期: {test_date}")
+    print(f"{'='*60}")
+    for stock in test_stocks:
+        is_st = stock_filter.is_st_stock(stock, test_date)
+        print(f"{stock}: 是否ST = {is_st}")
+
     # 测试批量过滤
-    print(f"\n批量过滤测试:")
+    print(f"\n{'='*60}")
+    print(f"批量过滤测试 (日期: {test_date}):")
+    print(f"{'='*60}")
     filtered, stats = stock_filter.filter_stocks(test_stocks, test_date)
     stock_filter.print_filter_stats(stats)
     print(f"过滤后股票: {filtered}")
