@@ -47,13 +47,16 @@ class StockFilter:
 
         Args:
             stock_code: 股票代码
-            check_date: 查询日期（格式：'YYYYMMDD'）
+            check_date: 查询日期（格式：'YYYYMMDD'或数字）
 
         Returns:
             bool: True表示是ST股票
         """
         if self.st_df is None:
             raise ValueError("请先调用load_data()加载数据")
+
+        # 确保check_date是字符串格式
+        check_date = str(check_date).replace('.0', '').strip()
 
         # 筛选该股票的ST记录
         stock_st = self.st_df[self.st_df['S_INFO_WINDCODE'] == stock_code]
@@ -140,7 +143,7 @@ class StockFilter:
 
         Args:
             stock_code: 股票代码
-            check_date: 查询日期（格式：'YYYYMMDD'）
+            check_date: 查询日期（格式：'YYYYMMDD'或数字）
             min_list_days: 最少上市天数（默认252个交易日，约1年）
 
         Returns:
@@ -152,16 +155,19 @@ class StockFilter:
             # 找不到上市日期，保守起见认为是新股
             return True
 
+        # 确保check_date是字符串格式
+        check_date = str(check_date).replace('.0', '').strip()
+
         # 计算上市天数（自然日）
         try:
             list_dt = datetime.strptime(list_date, '%Y%m%d')
             check_dt = datetime.strptime(check_date, '%Y%m%d')
             days_listed = (check_dt - list_dt).days
-
-
             calendar_threshold = round(min_list_days * 365 / 252)
-        except:
             return days_listed < calendar_threshold
+        except Exception as e:
+            # 日期解析失败，保守起见认为是新股
+            return True
 
     def filter_stocks(self, stock_list, check_date,
                      remove_st=True,

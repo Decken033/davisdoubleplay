@@ -127,17 +127,68 @@ class StockSelector:
         print(f"  当期报告期: {current_report}")
         print(f"  前期报告期: {prev_report}")
 
-        # 获取股票池（使用股票过滤器剔除ST和不符合条件的股票）
+        # 获取所有潜在股票（只做基础过滤：退市和无基础信息）
         if self.loader.use_stock_filter and self.loader.stock_filter:
-            valid_stocks = self.loader.stock_filter.get_valid_stocks(rebalance_date)
+            all_stocks = list(self.quarterly_net_profit.columns)
+            potential_stocks = []
+            for stock in all_stocks:
+                list_date = self.loader.stock_filter.get_list_date(stock)
+                if list_date is None:
+                    continue
+                if self.loader.stock_filter.is_delisted(stock, rebalance_date):
+                    continue
+                potential_stocks.append(stock)
         else:
-            valid_stocks = list(self.quarterly_net_profit.columns)
+            potential_stocks = list(self.quarterly_net_profit.columns)
 
         # 应用筛选规则
         candidates = []
+        filter_stats = {
+            'no_disclosure': 0,
+            'not_yet_disclosed': 0,
+            'st_filtered': 0,
+            'new_stock_filtered': 0,
+            'data_missing': 0,
+            'current_yoy_negative': 0,
+            'prev_profit_low': 0,
+            'prev_yoy_negative': 0,
+            'second_order_negative': 0,
+            'prev_rev_negative': 0,
+            'passed': 0
+        }
 
-        for stock in valid_stocks:
-            # 获取数据
+        for stock in potential_stocks:
+            # 获取该股票当期报告的披露日期
+            stock_disclosure = self.loader.report_dates[
+                (self.loader.report_dates['stock_id'] == stock) &
+                (self.loader.report_dates['date'] == current_report)
+            ]
+
+            # 如果找不到披露日期，跳过该股票
+            if len(stock_disclosure) == 0:
+                filter_stats['no_disclosure'] += 1
+                continue
+
+            disclosure_date = stock_disclosure.iloc[0]['issuing_date']
+
+            # 该股票的当期报告在调仓日必须已经真实披露
+            if pd.isna(disclosure_date) or disclosure_date > rebalance_date:
+                filter_stats['not_yet_disclosed'] += 1
+                continue
+
+            # 在该股票的报告披露日判断其是否有效
+            if self.loader.use_stock_filter and self.loader.stock_filter:
+                # 判断是否ST
+                if self.loader.stock_filter.is_st_stock(stock, disclosure_date):
+                    filter_stats['st_filtered'] += 1
+                    continue
+
+                # 判断是否新股（上市不足252个交易日）
+                if self.loader.stock_filter.is_new_stock(stock, disclosure_date, min_list_days=252):
+                    filter_stats['new_stock_filtered'] += 1
+                    continue
+
+            # 获取财务数据
             current_profit = self.quarterly_net_profit.loc[current_report, stock]
             prev_profit = self.quarterly_net_profit.loc[prev_report, stock]
             prev_rev = self.quarterly_oper_rev.loc[prev_report, stock]
@@ -149,29 +200,36 @@ class StockSelector:
             # 跳过数据缺失的股票
             if pd.isna(current_profit) or pd.isna(prev_profit) or pd.isna(prev_rev) or \
                pd.isna(current_yoy) or pd.isna(prev_yoy) or pd.isna(second_order_val):
+                filter_stats['data_missing'] += 1
                 continue
 
             # 规则1: 当期单季度净利润同比增速为正
             if current_yoy <= 0:
+                filter_stats['current_yoy_negative'] += 1
                 continue
 
             # 规则2: 前期净利润大于 300 万
             if prev_profit <= 3000000:
+                filter_stats['prev_profit_low'] += 1
                 continue
 
             # 规则3: 上一期单季度净利润同比增速为正
             if prev_yoy <= 0:
+                filter_stats['prev_yoy_negative'] += 1
                 continue
 
             # 规则4: 二阶增速为正
             if second_order_val <= 0:
+                filter_stats['second_order_negative'] += 1
                 continue
 
             # 规则5: 上一期单季度营收为正
             if prev_rev <= 0:
+                filter_stats['prev_rev_negative'] += 1
                 continue
 
             # 通过所有筛选
+            filter_stats['passed'] += 1
             candidates.append({
                 'stock_id': stock,
                 'second_order_growth': second_order_val,
@@ -181,6 +239,22 @@ class StockSelector:
                 'prev_profit': prev_profit,
                 'prev_rev': prev_rev
             })
+
+        # 打印筛选统计
+        print(f"  筛选统计:")
+        print(f"    潜在股票数: {len(potential_stocks)}")
+        if self.loader.use_stock_filter and self.loader.stock_filter:
+            print(f"    无披露信息: {filter_stats['no_disclosure']}")
+            print(f"    调仓日未披露: {filter_stats['not_yet_disclosed']}")
+            print(f"    ST股票: {filter_stats['st_filtered']}")
+            print(f"    新股: {filter_stats['new_stock_filtered']}")
+        print(f"    数据缺失: {filter_stats['data_missing']}")
+        print(f"    当期同比增速<=0: {filter_stats['current_yoy_negative']}")
+        print(f"    前期利润<=300万: {filter_stats['prev_profit_low']}")
+        print(f"    前期同比增速<=0: {filter_stats['prev_yoy_negative']}")
+        print(f"    二阶增速<=0: {filter_stats['second_order_negative']}")
+        print(f"    前期营收<=0: {filter_stats['prev_rev_negative']}")
+        print(f"    通过筛选: {filter_stats['passed']}")
 
         # 转换为DataFrame并排序
         if len(candidates) == 0:
@@ -193,8 +267,7 @@ class StockSelector:
         # 选择前 top_n 只
         top_stocks = candidates_df.head(top_n)
 
-        print(f"  筛选结果: {len(candidates_df)} 只股票符合条件")
-        print(f"  选择前 {min(top_n, len(top_stocks))} 只股票")
+        print(f"  最终选择前 {min(top_n, len(top_stocks))} 只股票")
 
         return list(top_stocks['stock_id'])
 
