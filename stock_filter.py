@@ -221,6 +221,36 @@ class StockFilter:
 
         return filtered_stocks, stats
 
+    def get_valid_stocks(self, check_date, remove_st=True, remove_new_stock=True, min_list_days=252):
+        """
+        获取指定日期的有效股票池
+
+        Args:
+            check_date: 查询日期（格式：'YYYYMMDD'）
+            remove_st: 是否剔除ST股票（默认True）
+            remove_new_stock: 是否剔除新股（默认True）
+            min_list_days: 新股判断的最少上市天数（默认252）
+
+        Returns:
+            list: 有效股票代码列表
+        """
+        if self.description_df is None or self.st_df is None:
+            raise ValueError("请先调用load_data()加载数据")
+
+        # 获取所有股票代码
+        all_stocks = self.description_df['S_INFO_WINDCODE'].tolist()
+
+        # 使用 filter_stocks 方法进行过滤
+        valid_stocks, _ = self.filter_stocks(
+            all_stocks,
+            check_date,
+            remove_st=remove_st,
+            remove_new_stock=remove_new_stock,
+            min_list_days=min_list_days
+        )
+
+        return valid_stocks
+
     def print_filter_stats(self, stats):
         """打印过滤统计信息"""
         print(f"  过滤前: {stats['total']} 只")

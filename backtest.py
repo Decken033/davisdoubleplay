@@ -20,109 +20,13 @@ class FactorBacktest:
         self.holdings = []  # 记录每期持仓
         self.returns = []   # 记录每期收益
 
-    def load_prices(self):
-        """加载收盘价数据"""
-        print(f"正在加载收盘价数据: {self.price_data_path}")
-        self.prices = pd.read_csv(
-            self.price_data_path,
-            dtype={'date': str, 'stock_id': str, 'adj_close': float}
-        )
 
-        # 转换为pivot表格式 (date x stock_id)
-        self.prices = self.prices.pivot(
-            index='date',
-            columns='stock_id',
-            values='adj_close'
-        )
 
-        print(f"收盘价数据加载完成: {self.prices.shape}")
-        print(f"日期范围: {self.prices.index[0]} 至 {self.prices.index[-1]}")
-        print(f"股票数量: {len(self.prices.columns)}")
 
-    def get_period_return(self, stocks, start_date, end_date, min_valid_stocks=5):
-        """
-        计算一组股票在指定区间的收益率
 
-        Args:
-            stocks: 股票代码列表
-            start_date: 开始日期（建仓日）
-            end_date: 结束日期（平仓日）
-            min_valid_stocks: 最少有效股票数，少于此数返回None
 
-        Returns:
-            tuple: (组合收益率, 有效股票数) 或 (None, 0)
-        """
-        if start_date not in self.prices.index or end_date not in self.prices.index:
-            return None, 0
 
-        # 获取开始和结束价格
-        start_prices = self.prices.loc[start_date, stocks]
-        end_prices = self.prices.loc[end_date, stocks]
 
-        # 计算个股收益率
-        stock_returns = (end_prices - start_prices) / start_prices
-
-        # 剔除NaN（停牌、退市、价格数据缺失等）
-        valid_returns = stock_returns.dropna()
-
-        if len(valid_returns) < min_valid_stocks:
-            return None, len(valid_returns)
-
-        # 等权平均收益
-        portfolio_return = valid_returns.mean()
-
-        return portfolio_return, len(valid_returns)
-
-    def get_market_return(self, start_date, end_date, min_valid_stocks=100):
-        """
-        计算全A平均收益率（等权）
-
-        Args:
-            start_date: 开始日期
-            end_date: 结束日期
-            min_valid_stocks: 最少有效股票数，少于此数返回None
-
-        Returns:
-            tuple: (市场收益率, 有效股票数) 或 (None, 0)
-        """
-        if start_date not in self.prices.index or end_date not in self.prices.index:
-            return None, 0
-
-        # 获取所有股票
-        all_stocks = self.prices.columns.tolist()
-
-        return self.get_period_return(all_stocks, start_date, end_date, min_valid_stocks)
-
-    def align_date_to_trading_day(self, date):
-        """
-        将日期对齐到最近的交易日（向后查找）
-
-        如果给定日期是交易日，直接返回；
-        如果是非交易日（周末/节假日），返回之后最近的交易日。
-
-        Args:
-            date: 日期字符串，格式'YYYYMMDD'
-
-        Returns:
-            str: 对齐后的交易日日期，如果找不到返回None
-        """
-        if self.prices is None:
-            raise ValueError("请先调用load_prices()加载价格数据")
-
-        # 如果日期本身就是交易日，直接返回
-        if date in self.prices.index:
-            return date
-
-        # 获取所有交易日
-        trading_days = self.prices.index.tolist()
-
-        # 向后查找最近的交易日
-        for trading_day in trading_days:
-            if trading_day >= date:
-                return trading_day
-
-        # 如果所有交易日都早于给定日期，返回None
-        return None
 
     def run_backtest(self, top_n=25):
         """
@@ -186,8 +90,15 @@ class FactorBacktest:
 
             # 获取当期选股
             try:
-                # 使用因子日期（未对齐）进行选股
-                top_stocks = self.loader.get_top_stocks(factor_start_date, top_n=top_n)
+                # 使用因子日期（未对齐）进行选股，传入数据清洗阈值
+                top_stocks = self.loader.get_top_stocks(
+                    factor_start_date,
+                    top_n=top_n,
+                    roe_min=3.0,    # ROE最低3%
+                    roe_max=30.0,   # ROE最高30%
+                    peg_min=0.2,    # PEG最低0.2
+                    peg_max=5.0     # PEG最高5.0
+                )
                 selected_stocks = top_stocks['stock_code'].tolist()
                 print(f"  选中股票数: {len(selected_stocks)}")
             except Exception as e:
@@ -306,9 +217,12 @@ if __name__ == '__main__':
     # 加载数据
     print("步骤 1: 加载因子数据")
     loader = DataLoader(
-        roe_ttm_path='roe_ttm_data.csv',
-        peg_path='peg_data.csv',
-        adj_close_path='adj_close.csv'
+        adj_close_path='adj_close.csv',
+        pe_ttm_path='pe_ttm_data.csv',
+        net_profit_path='AShareIncome_Q.csv',
+        oper_rev_path='AShareIncome_Q.csv',
+        report_date_path='AShareIssuingDatePredict.csv',
+        actual_disclosure_date_path='AShareIssuingDatePredict.csv'
     )
     loader.load_data()
 
