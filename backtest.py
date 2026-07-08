@@ -104,7 +104,7 @@ class FactorBacktest:
             # 选股
             selected_stocks = self.selector.get_top_stocks(current_date, top_n=top_n)
 
-            # 即使选不出股票，也继续处理（会自动清仓并扣除卖出成本）
+            # 即使选不出股票，也继续处理
 
             # 计算组合收益（包含交易成本和权重限制）
             result = self._calculate_portfolio_return_with_costs(
@@ -321,12 +321,14 @@ class FactorBacktest:
         if len(to_sell) > 0:
             sell_weight = 0.0
             for stock in to_sell:
-                # 检查股票在调仓日是否可交易
+                # 检查股票在调仓日（start_date）是否可交易
                 if stock in self.prices.columns:
                     start_price = self.prices.loc[start_date, stock]
+                    # 只要start_date有有效价格，就能卖出
+                    # 不需要检查end_date，因为卖出发生在start_date
                     if not pd.isna(start_price) and start_price > 0:
                         sell_weight += self.previous_portfolio[stock]
-                    # 停牌股票：不扣除卖出成本（实际无法卖出，继续持有）
+                    # start_date停牌：无法卖出，不扣成本（被动持有）
                 else:
                     # 股票已退市或不在价格数据中：假设能按上期价格清仓
                     sell_weight += self.previous_portfolio[stock]
@@ -434,7 +436,11 @@ class FactorBacktest:
         # 累计收益
         cumulative_portfolio = (1 + df['portfolio_return']).prod() - 1
         cumulative_benchmark = (1 + df['benchmark_return']).prod() - 1
-        cumulative_excess = (1 + df['excess_return']).prod() - 1
+
+        # 累计超额收益：策略和基准各自复利，最后比较净值差异
+        # 计算调整后的基准累计收益（每期按实际仓位调整）
+        cumulative_benchmark_adjusted = (1 + df['benchmark_return'] * df['position_pct']).prod() - 1
+        cumulative_excess = cumulative_portfolio - cumulative_benchmark_adjusted
 
         # 计算年化收益率
         # 计算回测期间的实际年数
@@ -445,7 +451,9 @@ class FactorBacktest:
         if years > 0:
             annual_return_portfolio = (1 + cumulative_portfolio) ** (1/years) - 1
             annual_return_benchmark = (1 + cumulative_benchmark) ** (1/years) - 1
-            annual_return_excess = (1 + cumulative_excess) ** (1/years) - 1
+            # 年化超额收益：策略年化 - 调整后基准年化
+            benchmark_adjusted_annual = (1 + cumulative_benchmark_adjusted) ** (1/years) - 1
+            annual_return_excess = annual_return_portfolio - benchmark_adjusted_annual
         else:
             annual_return_portfolio = 0.0
             annual_return_benchmark = 0.0
