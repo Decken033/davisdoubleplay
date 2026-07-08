@@ -197,6 +197,55 @@ class DataLoader:
 
         return list(self.pe_ttm.index)
 
+    def align_to_trading_date(self, target_date, max_lookback_days=10):
+        """
+        将目标日期对齐到价格数据中实际存在的、且不晚于目标日期的最近交易日
+
+        Args:
+            target_date: 目标日期（格式：'YYYYMMDD'）
+            max_lookback_days: 最大回溯天数（默认10天），如果超过此范围仍未找到，返回None
+
+        Returns:
+            str: 对齐后的交易日（格式：'YYYYMMDD'），如果找不到返回None
+        """
+        if self.adj_close is None:
+            raise ValueError("请先调用load_data()加载数据")
+
+        # 如果目标日期本身就在价格数据中，直接返回
+        if target_date in self.adj_close.index:
+            return target_date
+
+        # 将字符串日期转换为pandas datetime
+        target_dt = pd.to_datetime(target_date, format='%Y%m%d')
+
+        # 获取所有可用的交易日（按时间排序）
+        available_dates = pd.to_datetime(self.adj_close.index, format='%Y%m%d').sort_values()
+
+        # 筛选出不晚于目标日期的交易日
+        valid_dates = available_dates[available_dates <= target_dt]
+
+        if len(valid_dates) == 0:
+            print(f"   警告：找不到早于 {target_date} 的交易日")
+            return None
+
+        # 取最近的一个交易日
+        aligned_date = valid_dates[-1]
+
+        # 检查是否超过最大回溯天数
+        days_diff = (target_dt - aligned_date).days
+        if days_diff > max_lookback_days:
+            print(f"   警告：{target_date} 回溯 {days_diff} 天才找到交易日 {aligned_date.strftime('%Y%m%d')}，超过最大回溯天数 {max_lookback_days}")
+            return None
+
+        # 转换回字符串格式
+        aligned_date_str = aligned_date.strftime('%Y%m%d')
+
+        # 如果对齐后的日期与目标日期不同，打印提示
+        if aligned_date_str != target_date:
+            print(f"   日期对齐：{target_date} -> {aligned_date_str} (回溯 {days_diff} 天)")
+
+        return aligned_date_str
+
 
 if __name__ == '__main__':
     # 测试代码
@@ -228,3 +277,17 @@ if __name__ == '__main__':
         print(f"  营业收入: {financial_data['oper_rev']}")
     else:
         print(f"  无可用数据")
+
+    # 测试日期对齐功能
+    print(f"\n测试日期对齐功能:")
+    test_dates = [
+        '20101022',  # 假设是交易日
+        '20101023',  # 假设是周末
+        '20101001',  # 假设是国庆节
+    ]
+    for date in test_dates:
+        aligned = loader.align_to_trading_date(date)
+        if aligned:
+            print(f"  {date} -> {aligned}")
+        else:
+            print(f"  {date} -> 无法对齐")

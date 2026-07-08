@@ -17,10 +17,13 @@ class StockSelector:
         self.loader = data_loader
         self.quarterly_net_profit = None  # 单季度净利润
         self.quarterly_oper_rev = None  # 单季度营收
+        self.yoy_growth = None  # 同比增速（预计算）
+        self.second_order = None  # 二阶增速（预计算）
 
     def calculate_quarterly_data(self):
         """
         加载单季度数据（数据源已经是单季度，无需还原）
+        并预计算同比增速和二阶增速
         """
         print("\n正在加载单季度数据...")
 
@@ -28,8 +31,19 @@ class StockSelector:
         self.quarterly_net_profit = self.loader.net_profit.copy()
         self.quarterly_oper_rev = self.loader.oper_rev.copy()
 
+        # 确保索引是字符串类型（YYYYMMDD格式）
+        self.quarterly_net_profit.index = self.quarterly_net_profit.index.astype(str)
+        self.quarterly_oper_rev.index = self.quarterly_oper_rev.index.astype(str)
+
         print(f"单季度净利润: {self.quarterly_net_profit.shape}")
         print(f"单季度营收: {self.quarterly_oper_rev.shape}")
+
+        # 预计算同比增速和二阶增速（避免在每次调仓时重复计算）
+        print("\n正在预计算同比增速和二阶增速...")
+        self.yoy_growth = self.calculate_yoy_growth()
+        self.second_order = self.calculate_second_order_growth(self.yoy_growth)
+        print(f"同比增速: {self.yoy_growth.shape}")
+        print(f"二阶增速: {self.second_order.shape}")
 
     def calculate_yoy_growth(self):
         """
@@ -43,6 +57,9 @@ class StockSelector:
         yoy_growth = pd.DataFrame(index=dates, columns=self.quarterly_net_profit.columns)
 
         for date in dates:
+            # 确保日期是字符串类型
+            date = str(date)
+
             # 计算去年同期日期
             year = int(date[:4])
             last_year_date = str(year - 1) + date[4:]
@@ -53,7 +70,12 @@ class StockSelector:
 
                 # 同比增速 = (本期 - 去年同期) / abs(去年同期)
                 # 注意：去年同期可能为负，用绝对值作为基数
-                yoy_growth.loc[date] = (current - last_year) / last_year.abs()
+                # 关键：去年同期为0时，将inf替换为NaN
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    growth = (current - last_year) / last_year.abs()
+                    # 将inf和-inf替换为NaN（去年同期为0的情况）
+                    growth = growth.replace([np.inf, -np.inf], np.nan)
+                yoy_growth.loc[date] = growth
 
         return yoy_growth
 
@@ -105,27 +127,17 @@ class StockSelector:
         Returns:
             list: 选中的股票代码列表
         """
-        # 计算同比增速和二阶增速
-        yoy_growth = self.calculate_yoy_growth()
-        second_order = self.calculate_second_order_growth(yoy_growth)
+        # 使用预计算的同比增速和二阶增速（避免重复计算）
+        if self.yoy_growth is None or self.second_order is None:
+            raise ValueError("请先调用calculate_quarterly_data()进行数据初始化")
+
+        yoy_growth = self.yoy_growth
+        second_order = self.second_order
 
         # 获取所有报告期日期（按时间排序）
         report_dates = sorted(self.quarterly_net_profit.index)
 
-        # 找到在调仓日前已披露的最新报告期
-        available_reports = [d for d in report_dates
-                           if self._is_report_disclosed(d, rebalance_date)]
-
-        if len(available_reports) < 2:
-            print(f"警告: {rebalance_date} 前可用报告期不足2个，无法选股")
-            return []
-
-        current_report = available_reports[-1]  # 当期
-        prev_report = available_reports[-2]  # 前期
-
         print(f"\n调仓日: {rebalance_date}")
-        print(f"  当期报告期: {current_report}")
-        print(f"  前期报告期: {prev_report}")
 
         # 获取所有潜在股票（只做基础过滤：退市和无基础信息）
         if self.loader.use_stock_filter and self.loader.stock_filter:
@@ -135,6 +147,8 @@ class StockSelector:
                 list_date = self.loader.stock_filter.get_list_date(stock)
                 if list_date is None:
                     continue
+                # 注意：退市判断仍使用调仓日，因为我们要确保调仓时股票未退市
+                # ST和新股判断会在循环内使用披露日判断
                 if self.loader.stock_filter.is_delisted(stock, rebalance_date):
                     continue
                 potential_stocks.append(stock)
@@ -144,8 +158,8 @@ class StockSelector:
         # 应用筛选规则
         candidates = []
         filter_stats = {
-            'no_disclosure': 0,
-            'not_yet_disclosed': 0,
+            'insufficient_reports': 0,
+            'non_standard_quarter': 0,
             'st_filtered': 0,
             'new_stock_filtered': 0,
             'data_missing': 0,
@@ -157,47 +171,88 @@ class StockSelector:
             'passed': 0
         }
 
+        # 预先计算财务数据可用的报告期集合（避免在循环内重复计算）
+        available_financial_dates = set(report_dates)
+
         for stock in potential_stocks:
-            # 获取该股票当期报告的披露日期
-            stock_disclosure = self.loader.report_dates[
-                (self.loader.report_dates['stock_id'] == stock) &
-                (self.loader.report_dates['date'] == current_report)
-            ]
+            # 为该股票单独确定在调仓日已披露的所有报告期
+            stock_reports = self.loader.report_dates[
+                self.loader.report_dates['stock_id'] == stock
+            ].copy()
 
-            # 如果找不到披露日期，跳过该股票
-            if len(stock_disclosure) == 0:
-                filter_stats['no_disclosure'] += 1
+            # 筛选出在调仓日前已披露的报告期
+            stock_reports = stock_reports[
+                (stock_reports['issuing_date'].notna()) &
+                (stock_reports['issuing_date'] <= rebalance_date)
+            ].sort_values('date')
+
+            # 关键：必须同时存在于财务数据表中（两个数据源的交集）
+            stock_reports = stock_reports[stock_reports['date'].isin(available_financial_dates)]
+
+            # 该股票至少需要2个已披露且有财务数据的报告期才能计算二阶增速
+            if len(stock_reports) < 2:
+                filter_stats['insufficient_reports'] += 1
                 continue
 
-            disclosure_date = stock_disclosure.iloc[0]['issuing_date']
+            # 获取该股票自己的当期和前期报告期
+            stock_current_report = stock_reports.iloc[-1]['date']
+            stock_disclosure_date = stock_reports.iloc[-1]['issuing_date']
 
-            # 该股票的当期报告在调仓日必须已经真实披露
-            if pd.isna(disclosure_date) or disclosure_date > rebalance_date:
-                filter_stats['not_yet_disclosed'] += 1
+            # 计算理论上的前期报告期（当期往前推一个季度）
+            # 报告期格式: YYYYMMDD，其中月日部分为 0331/0630/0930/1231
+            current_year = int(stock_current_report[:4])
+            current_month_day = stock_current_report[4:]
+
+            # 根据当期的月日判断季度，并计算前一季度
+            if current_month_day == '0331':  # Q1
+                expected_prev_report = f"{current_year - 1}1231"  # 上年Q4
+            elif current_month_day == '0630':  # Q2
+                expected_prev_report = f"{current_year}0331"  # 本年Q1
+            elif current_month_day == '0930':  # Q3
+                expected_prev_report = f"{current_year}0630"  # 本年Q2
+            elif current_month_day == '1231':  # Q4
+                expected_prev_report = f"{current_year}0930"  # 本年Q3
+            else:
+                # 非标准季度报告期，跳过
+                filter_stats['non_standard_quarter'] += 1
                 continue
 
-            # 在该股票的报告披露日判断其是否有效
+            # 验证理论上的前期报告期是否在已披露列表中
+            # 必须确保前后两期是连续的季度，才能计算有意义的二阶增速
+            if expected_prev_report not in stock_reports['date'].values:
+                filter_stats['insufficient_reports'] += 1
+                continue
+
+            stock_prev_report = expected_prev_report
+
+            # 在该股票的当期报告披露日判断其是否有效
             if self.loader.use_stock_filter and self.loader.stock_filter:
                 # 判断是否ST
-                if self.loader.stock_filter.is_st_stock(stock, disclosure_date):
+                if self.loader.stock_filter.is_st_stock(stock, stock_disclosure_date):
                     filter_stats['st_filtered'] += 1
                     continue
 
                 # 判断是否新股（上市不足252个交易日）
-                if self.loader.stock_filter.is_new_stock(stock, disclosure_date, min_list_days=252):
+                if self.loader.stock_filter.is_new_stock(stock, stock_disclosure_date, min_list_days=252):
                     filter_stats['new_stock_filtered'] += 1
                     continue
 
-            # 获取财务数据
-            current_profit = self.quarterly_net_profit.loc[current_report, stock]
-            prev_profit = self.quarterly_net_profit.loc[prev_report, stock]
-            prev_rev = self.quarterly_oper_rev.loc[prev_report, stock]
+            # 获取财务数据（使用该股票自己的报告期）
+            # 增加安全检查：确保索引和列都存在
+            try:
+                current_profit = self.quarterly_net_profit.loc[stock_current_report, stock]
+                prev_profit = self.quarterly_net_profit.loc[stock_prev_report, stock]
+                prev_rev = self.quarterly_oper_rev.loc[stock_prev_report, stock]
 
-            current_yoy = yoy_growth.loc[current_report, stock]
-            prev_yoy = yoy_growth.loc[prev_report, stock]
-            second_order_val = second_order.loc[current_report, stock]
+                current_yoy = yoy_growth.loc[stock_current_report, stock]
+                prev_yoy = yoy_growth.loc[stock_prev_report, stock]
+                second_order_val = second_order.loc[stock_current_report, stock]
+            except (KeyError, IndexError):
+                # 即使通过了交集过滤，某些边缘情况下仍可能访问失败
+                filter_stats['data_missing'] += 1
+                continue
 
-            # 跳过数据缺失的股票
+            # 跳过数据缺失的股票（NaN值）
             if pd.isna(current_profit) or pd.isna(prev_profit) or pd.isna(prev_rev) or \
                pd.isna(current_yoy) or pd.isna(prev_yoy) or pd.isna(second_order_val):
                 filter_stats['data_missing'] += 1
@@ -237,15 +292,17 @@ class StockSelector:
                 'prev_yoy': prev_yoy,
                 'current_profit': current_profit,
                 'prev_profit': prev_profit,
-                'prev_rev': prev_rev
+                'prev_rev': prev_rev,
+                'current_report': stock_current_report,
+                'prev_report': stock_prev_report
             })
 
         # 打印筛选统计
         print(f"  筛选统计:")
         print(f"    潜在股票数: {len(potential_stocks)}")
+        print(f"    报告期不足2个: {filter_stats['insufficient_reports']}")
+        print(f"    非标准季度: {filter_stats['non_standard_quarter']}")
         if self.loader.use_stock_filter and self.loader.stock_filter:
-            print(f"    无披露信息: {filter_stats['no_disclosure']}")
-            print(f"    调仓日未披露: {filter_stats['not_yet_disclosed']}")
             print(f"    ST股票: {filter_stats['st_filtered']}")
             print(f"    新股: {filter_stats['new_stock_filtered']}")
         print(f"    数据缺失: {filter_stats['data_missing']}")
@@ -262,6 +319,13 @@ class StockSelector:
             return []
 
         candidates_df = pd.DataFrame(candidates)
+
+        # 检查是否存在重复的股票（理论上不应该有，但做一次防御性检查）
+        if candidates_df['stock_id'].duplicated().any():
+            print(f"  警告：发现重复股票，去重前 {len(candidates_df)} 只")
+            candidates_df = candidates_df.drop_duplicates(subset='stock_id', keep='first')
+            print(f"  去重后 {len(candidates_df)} 只")
+
         candidates_df = candidates_df.sort_values('second_order_growth', ascending=False)
 
         # 选择前 top_n 只
@@ -270,30 +334,6 @@ class StockSelector:
         print(f"  最终选择前 {min(top_n, len(top_stocks))} 只股票")
 
         return list(top_stocks['stock_id'])
-
-    def _is_report_disclosed(self, report_date, as_of_date):
-        """
-        判断某个报告期在指定日期前是否已披露
-
-        Args:
-            report_date: 报告期（格式：'YYYYMMDD'）
-            as_of_date: 查询日期（格式：'YYYYMMDD'）
-
-        Returns:
-            bool: 是否已披露
-        """
-        # 在report_dates中查找该报告期的披露日期
-        report_info = self.loader.report_dates[
-            self.loader.report_dates['date'] == report_date
-        ]
-
-        if len(report_info) == 0:
-            return False
-
-        # 检查是否有任何股票在as_of_date前披露了该报告期
-        # 这里简化处理：只要有股票披露了，就认为该报告期可用
-        disclosed = report_info[report_info['issuing_date'] <= as_of_date]
-        return len(disclosed) > 0
 
 
 if __name__ == '__main__':
