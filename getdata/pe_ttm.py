@@ -37,8 +37,19 @@ def test_pe_ttm_interface():
 def get_pettm_data():
     print("获取pe_ttm数据")
 
-    # 从roe_ttm_data.csv读取，按调仓日分组获取每期的股票池
-    print("正在读取roe_ttm_data.csv以获取调仓日和对应股票池...")
+    # 生成固定的调仓日期：2010-2017年，每年1月20日、4月20日、7月20日、10月20日
+    rebalance_dates = []
+    for year in range(2010, 2018):  # 2010到2017年
+        for month in [1, 4, 7, 10]:
+            date_str = f"{year}{month:02d}20"
+            rebalance_dates.append(date_str)
+
+    rebalance_dates.sort()
+    print(f"调仓日期: {rebalance_dates}")
+    print(f"调仓日数量: {len(rebalance_dates)}")
+
+    # 从roe_ttm_data.csv读取股票池（使用所有股票）
+    print("\n正在读取roe_ttm_data.csv以获取股票池...")
     df_roe = pd.read_csv(
         "../roe_ttm_data.csv",
         dtype={
@@ -48,18 +59,13 @@ def get_pettm_data():
         }
     )
 
-    # 注意：roe_ttm_data.csv中的date字段应该是调仓日（或已经对齐的日期）
-    print(f"总记录数: {len(df_roe)}")
-    print(f"日期范围: {df_roe['date'].min()} 到 {df_roe['date'].max()}")
+    # 获取所有唯一的股票代码作为股票池
+    all_stocks = df_roe["stock_id"].unique().tolist()
+    print(f"股票池总数: {len(all_stocks)}")
 
-    # 按调仓日分组，获取每个调仓日对应的股票池
-    rebalance_stock_dict = {}
-    for date in sorted(df_roe["date"].unique()):
-        stocks = df_roe[df_roe["date"] == date]["stock_id"].tolist()
-        rebalance_stock_dict[date] = stocks
-
-    print(f"调仓日数量: {len(rebalance_stock_dict)}")
-    print(f"示例 - {list(rebalance_stock_dict.keys())[0]}: {len(rebalance_stock_dict[list(rebalance_stock_dict.keys())[0]])} 只股票")
+    # 为每个调仓日使用相同的股票池
+    rebalance_stock_dict = {date: all_stocks for date in rebalance_dates}
+    print(f"每个调仓日的股票数: {len(all_stocks)}")
 
     # 读取adj_close.csv获取所有交易日，用于找到前一交易日
     print("\n正在读取adj_close.csv以确定前一交易日...")
@@ -85,9 +91,10 @@ def get_pettm_data():
 
         print(f"  调仓日 {rebalance_date} -> PE_TTM取数日 {pe_date}")
 
-    # 计算总请求数
-    total_requests = sum(len(rebalance_stock_dict[rb]) for rb in rebalance_to_pe_date.keys())
+    # 计算总请求数（只统计实际会请求的调仓日）
+    total_requests = len(rebalance_to_pe_date) * len(all_stocks)
     print(f"\n总请求数: {total_requests}")
+    print(f"有效调仓日: {len(rebalance_to_pe_date)}/{len(rebalance_dates)}")
 
     output_file = "../pe_ttm_data.csv"
     temp_file = "../pe_ttm_temp.csv"

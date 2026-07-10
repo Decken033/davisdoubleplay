@@ -10,6 +10,7 @@ class DataLoader:
                  net_profit_path='AShareIncome_Q.csv', oper_rev_path='AShareIncome_Q.csv',
                  report_date_path='AShareIssuingDatePredict.csv',
                  actual_disclosure_date_path='AShareIssuingDatePredict.csv',
+                 rebalance_dates_path='rebalance_dates.csv',
                  use_stock_filter=True, description_path='AShareDescription.xlsx', st_path='AShareST.xlsx'):
         """
         初始化数据加载器
@@ -21,6 +22,7 @@ class DataLoader:
             oper_rev_path: 营业收入数据CSV文件路径
             report_date_path: 报告期CSV文件路径（包含stock_id, date字段）
             actual_disclosure_date_path: 实际披露日期CSV文件路径（包含stock_id, date, issuing_date字段）
+            rebalance_dates_path: 调仓日期CSV文件路径
             use_stock_filter: 是否使用股票过滤器（默认True）
             description_path: 上市日期数据路径
             st_path: ST状态数据路径
@@ -31,6 +33,7 @@ class DataLoader:
         self.oper_rev_path = oper_rev_path
         self.report_date_path = report_date_path
         self.actual_disclosure_date_path = actual_disclosure_date_path
+        self.rebalance_dates_path = rebalance_dates_path
 
         # 数据容器
         self.adj_close = None
@@ -38,6 +41,7 @@ class DataLoader:
         self.net_profit = None
         self.oper_rev = None
         self.report_dates = None  # DataFrame: stock_id, date(报告期), issuing_date(实际披露日期)
+        self.rebalance_dates = None  # 调仓日期列表
 
         self.use_stock_filter = use_stock_filter
         self.stock_filter = None
@@ -55,6 +59,7 @@ class DataLoader:
         print(f"  营业收入: {self.oper_rev_path}")
         print(f"  报告期: {self.report_date_path}")
         print(f"  实际披露日期: {self.actual_disclosure_date_path}")
+        print(f"  调仓日期: {self.rebalance_dates_path}")
 
         # 加载收盘价数据（长格式: date, stock_id, adj_close）
         adj_close_df = pd.read_csv(self.adj_close_path, dtype={'date': str, 'stock_id': str})
@@ -64,6 +69,11 @@ class DataLoader:
             values='adj_close'
         )
         self.adj_close.index.name = 'date'
+
+        # 加载调仓日期
+        rebalance_df = pd.read_csv(self.rebalance_dates_path, dtype={'date': str})
+        self.rebalance_dates = sorted(rebalance_df['date'].tolist())
+        print(f"  调仓日期数量: {len(self.rebalance_dates)}")
 
         # 加载pe_ttm数据（长格式: rebalance_date, pe_date, stock_id, pe_ttm）
         pe_df = pd.read_csv(self.pe_ttm_path, dtype={'rebalance_date': str, 'stock_id': str})
@@ -192,10 +202,10 @@ class DataLoader:
         Returns:
             list: 调仓日期列表
         """
-        if self.pe_ttm is None:
+        if self.rebalance_dates is None:
             raise ValueError("请先调用load_data()加载数据")
 
-        return list(self.pe_ttm.index)
+        return self.rebalance_dates
 
     def align_to_trading_date(self, target_date, max_lookback_days=10):
         """

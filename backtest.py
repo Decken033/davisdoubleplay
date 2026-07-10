@@ -555,6 +555,7 @@ if __name__ == '__main__':
         oper_rev_path='AShareIncome_Q.csv',
         report_date_path='AShareIssuingDatePredict.csv',
         actual_disclosure_date_path='AShareIssuingDatePredict.csv',
+        rebalance_dates_path='rebalance_dates.csv',
         use_stock_filter=True,
         description_path='AShareDescription.xlsx',
         st_path='AShareST.xlsx'
